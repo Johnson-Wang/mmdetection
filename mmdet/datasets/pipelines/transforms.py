@@ -654,7 +654,6 @@ class MinIoURandomCrop(object):
         valid_patch[np.where(random_min_ious == 1)] = True
         if valid_patch.any():
             idx = random.choice(valid_patch.nonzero()[0])
-            print(random_min_ious[idx])
             patch = patches[idx]
             if num_boxes > 0:
                 mask = mask[idx]
