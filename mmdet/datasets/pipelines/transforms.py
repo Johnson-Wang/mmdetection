@@ -594,85 +594,90 @@ class MinIoURandomCrop(object):
     selected from min_ious.
 
     Args:
-        min_ious (tuple): minimum IoU threshold for all intersections with
-        bounding boxes
-        min_crop_size (float): minimum crop's size (i.e. h,w := a*h, a*w,
-        where a >= min_crop_size).
+        min_ious (tuple): Minimum IoU threshold for all intersections with
+            bounding boxes
+        num_candidates(int): Number of candidates of crops to choose from
+        min_crop_size (float): Minimum crop's size (i.e. h,w := a*h, a*w,
+            where a >= min_crop_size).
     """
 
-    def __init__(self, min_ious=(0.1, 0.3, 0.5, 0.7, 0.9), min_crop_size=0.3):
+    def __init__(self,
+                 min_ious=(0.1, 0.3, 0.5, 0.7, 0.9),
+                 num_candidates=50,
+                 min_crop_size=0.3):
         # 1: return ori img
         self.min_ious = min_ious
         self.sample_mode = (1, *min_ious, 0)
+        self.num_candidates = num_candidates
         self.min_crop_size = min_crop_size
 
     def __call__(self, results):
         img, boxes, labels = [
             results[k] for k in ('img', 'gt_bboxes', 'gt_labels')
         ]
+        assert boxes.shape[1] == 4
+        num_boxes = boxes.shape[0]
+        num_rand_boxes = self.num_candidates * len(self.sample_mode)
         h, w, c = img.shape
-        while True:
-            mode = random.choice(self.sample_mode)
-            if mode == 1:
-                return results
+        random_min_ious = random.choice(self.sample_mode, num_rand_boxes)
 
-            min_iou = mode
-            for i in range(50):
-                new_w = random.uniform(self.min_crop_size * w, w)
-                new_h = random.uniform(self.min_crop_size * h, h)
+        # Uniform sampling from self.min_crop_size to 1
+        # Shape: (num_rand_boxes, 2) with 2 denoting w and h
+        rand_scales_wh = random.rand(
+            num_rand_boxes, 2) * (1 - self.min_crop_size) + self.min_crop_size
+        # Shape: (num_rand_boxes, 2) with 2 denoting x and y
+        rand_begins_xy = random.rand(num_rand_boxes, 2) * (1 - rand_scales_wh)
 
-                # h / w in [0.5, 2]
-                if new_h / new_w < 0.5 or new_h / new_w > 2:
-                    continue
+        # Shape: (num_rand_boxes, 4)
+        patches = np.concatenate(
+            (rand_begins_xy, rand_scales_wh + rand_begins_xy), axis=-1)
+        # valid patch flags
+        valid_patch = (rand_scales_wh[:, 1] / rand_scales_wh[:, 0] > 0.5) & \
+                      (rand_scales_wh[:, 1] / rand_scales_wh[:, 0] < 2)
+        patches = (patches * np.array([w, h, w, h])).astype(np.int)
 
-                left = random.uniform(w - new_w)
-                top = random.uniform(h - new_h)
+        patches[np.where(random_min_ious == 1)] = np.array([0, 0, w, h])
+        valid_patch &= (patches[:, 2] > patches[:, 0]) & (
+            patches[:, 3] > patches[:, 1])
+        if num_boxes > 0:
+            overlaps = bbox_overlaps(
+                patches.reshape(-1, 4),
+                boxes.reshape(-1, 4)).reshape(num_rand_boxes, num_boxes)
+            valid_patch &= (overlaps.min(axis=-1) > random_min_ious)
+            center = (boxes[:, :2] + boxes[:, 2:]) / 2
 
-                patch = np.array(
-                    (int(left), int(top), int(left + new_w), int(top + new_h)))
-                # Line or point crop is not allowed
-                if patch[2] == patch[0] or patch[3] == patch[1]:
-                    continue
-                overlaps = bbox_overlaps(
-                    patch.reshape(-1, 4), boxes.reshape(-1, 4)).reshape(-1)
-                if len(overlaps) > 0 and overlaps.min() < min_iou:
-                    continue
+            mask = ((center[:, 0] > patches[:, 0, np.newaxis]) *
+                    (center[:, 1] > patches[:, 1, np.newaxis]) *
+                    (center[:, 0] < patches[:, 2, np.newaxis]) *
+                    (center[:, 1] < patches[:, 3, np.newaxis]))
+            valid_patch &= mask.any(axis=-1)
+        valid_patch[np.where(random_min_ious == 1)] = True
+        if valid_patch.any():
+            idx = random.choice(valid_patch.nonzero()[0])
+            print(random_min_ious[idx])
+            patch = patches[idx]
+            if num_boxes > 0:
+                mask = mask[idx]
+                boxes = boxes[mask]
+                labels = labels[mask]
+                boxes[:, 2:] = boxes[:, 2:].clip(max=patch[2:])
+                boxes[:, :2] = boxes[:, :2].clip(min=patch[:2])
+                boxes -= np.tile(patch[:2], 2)
 
-                # center of boxes should inside the crop img
-                # only adjust boxes and instance masks when the gt is not empty
-                if len(overlaps) > 0:
-                    # adjust boxes
-                    center = (boxes[:, :2] + boxes[:, 2:]) / 2
-                    mask = ((center[:, 0] > patch[0]) *
-                            (center[:, 1] > patch[1]) *
-                            (center[:, 0] < patch[2]) *
-                            (center[:, 1] < patch[3]))
-                    if not mask.any():
-                        continue
-
-                    boxes = boxes[mask]
-                    labels = labels[mask]
-
-                    boxes[:, 2:] = boxes[:, 2:].clip(max=patch[2:])
-                    boxes[:, :2] = boxes[:, :2].clip(min=patch[:2])
-                    boxes -= np.tile(patch[:2], 2)
-
-                    results['gt_bboxes'] = boxes
-                    results['gt_labels'] = labels
-
-                    if 'gt_masks' in results:
-                        results['gt_masks'] = results['gt_masks'][
-                            mask.nonzero()[0]].crop(patch)
-
-                # adjust the img no matter whether the gt is empty before crop
-                img = img[patch[1]:patch[3], patch[0]:patch[2]]
-                results['img'] = img
-
-                # not tested
-                if 'gt_semantic_seg' in results:
-                    results['gt_semantic_seg'] = results['gt_semantic_seg'][
-                        patch[1]:patch[3], patch[0]:patch[2]]
-                return results
+                results['gt_bboxes'] = boxes
+                results['gt_labels'] = labels
+                if 'gt_masks' in results:
+                    results['gt_masks'] = results['gt_masks'][mask.nonzero()
+                                                              [0]].crop(patch)
+            # adjust the img no matter whether the gt is empty before crop
+            img = img[patch[1]:patch[3], patch[0]:patch[2]]
+            results['img'] = img
+            # not tested
+            if 'gt_semantic_seg' in results:
+                results['gt_semantic_seg'] = results['gt_semantic_seg'][
+                    patch[1]:patch[3], patch[0]:patch[2]]
+        else:
+            return results
 
     def __repr__(self):
         repr_str = self.__class__.__name__
