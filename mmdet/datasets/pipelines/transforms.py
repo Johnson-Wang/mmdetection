@@ -675,8 +675,7 @@ class MinIoURandomCrop(object):
             if 'gt_semantic_seg' in results:
                 results['gt_semantic_seg'] = results['gt_semantic_seg'][
                     patch[1]:patch[3], patch[0]:patch[2]]
-        else:
-            return results
+        return results
 
     def __repr__(self):
         repr_str = self.__class__.__name__
