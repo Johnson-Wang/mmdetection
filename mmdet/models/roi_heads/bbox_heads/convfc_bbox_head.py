@@ -1,5 +1,6 @@
 import torch.nn as nn
 from mmcv.cnn import ConvModule
+from mmcv.cnn.bricks import build_norm_layer
 
 from mmdet.models.builder import HEADS
 from .bbox_head import BBoxHead
@@ -118,8 +119,12 @@ class ConvFCBBoxHead(BBoxHead):
             for i in range(num_branch_fcs):
                 fc_in_channels = (
                     last_layer_dim if i == 0 else self.fc_out_channels)
-                branch_fcs.append(
-                    nn.Linear(fc_in_channels, self.fc_out_channels))
+                fc = nn.Linear(fc_in_channels, self.fc_out_channels)
+                if self.norm_cfg is not None:
+                    _, norm = build_norm_layer(self.norm_cfg,
+                                               self.fc_out_channels)
+                    fc = nn.Sequential(fc, norm)
+                branch_fcs.append(fc)
             last_layer_dim = self.fc_out_channels
         return branch_convs, branch_fcs, last_layer_dim
 
