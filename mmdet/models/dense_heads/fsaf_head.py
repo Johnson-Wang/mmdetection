@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-from mmcv.cnn import normal_init
 
 from mmdet.core import (anchor_inside_flags, force_fp32, images_to_levels,
                         multi_apply, unmap)
@@ -40,30 +39,6 @@ class FSAFHead(RetinaHead):
     def __init__(self, *args, score_threshold=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.score_threshold = score_threshold
-
-    def forward_single(self, x):
-        """Forward feature map of a single scale level.
-
-        Args:
-            x (Tensor): Feature map of a single scale level.
-
-        Returns:
-            tuple (Tensor):
-                cls_score (Tensor): Box scores for each scale level
-                    Has shape (N, num_points * num_classes, H, W).
-                bbox_pred (Tensor): Box energies / deltas for each scale
-                    level with shape (N, num_points * 4, H, W).
-        """
-        cls_score, bbox_pred = super().forward_single(x)
-        # relu: TBLR encoder only accepts positive bbox_pred
-        return cls_score, self.relu(bbox_pred)
-
-    def init_weights(self):
-        """Initialize weights of the head."""
-        super(FSAFHead, self).init_weights()
-        # The positive bias in self.retina_reg conv is to prevent predicted \
-        #  bbox with 0 area
-        normal_init(self.retina_reg, std=0.01, bias=0.25)
 
     def _get_targets_single(self,
                             flat_anchors,
@@ -195,9 +170,6 @@ class FSAFHead(RetinaHead):
         Returns:
             dict[str, Tensor]: A dictionary of loss components.
         """
-        for i in range(len(bbox_preds)):  # loop over fpn level
-            # avoid 0 area of the predicted bbox
-            bbox_preds[i] = bbox_preds[i].clamp(min=1e-4)
         # TODO: It may directly use the base-class loss function.
         featmap_sizes = [featmap.size()[-2:] for featmap in cls_scores]
         assert len(featmap_sizes) == self.anchor_generator.num_levels
