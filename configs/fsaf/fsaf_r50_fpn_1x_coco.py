@@ -14,7 +14,7 @@ model = dict(
         #  grid of features.
         anchor_generator=dict(
             type='AnchorGenerator',
-            octave_base_scale=1,
+            octave_base_scale=4,
             scales_per_octave=1,
             ratios=[1.0],
             strides=[8, 16, 32, 64, 128]),
