@@ -39,7 +39,9 @@ def init_detector(config, checkpoint=None, device='cuda:0', cfg_options=None):
     if checkpoint is not None:
         map_loc = 'cpu' if device == 'cpu' else None
         checkpoint = load_checkpoint(model, checkpoint, map_location=map_loc)
-        if 'CLASSES' in checkpoint['meta']:
+        # old versions did not save class info in checkpoints, this workaround
+        #  is for backward compatibility
+        if checkpoint.get('meta', {}).get('CLASSES', None) is not None:
             model.CLASSES = checkpoint['meta']['CLASSES']
         else:
             warnings.simplefilter('once')
